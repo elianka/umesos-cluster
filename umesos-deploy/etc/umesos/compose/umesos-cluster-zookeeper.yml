@@ -1,0 +1,10 @@
+  zookeeper:
+    image: zookeeper:3.4.9
+    net: host
+    environment:
+    - JMXDISABLE=true
+    - ZOO_MY_ID=%{zoo_cluster_id}
+    - ZOO_SERVERS=%{zoo_cluster_server}
+    volumes:
+    - /data/umesos/zookeeper/data:/data
+    restart: always

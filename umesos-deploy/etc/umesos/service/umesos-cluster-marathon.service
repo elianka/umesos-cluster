@@ -1,0 +1,14 @@
+[Unit]
+Description=umesos cluster -- marathon
+After=docker.service
+Requires=docker.service
+[Service]
+ExecStart=/bin/sh -c 'docker-compose -p umesos -f /etc/umesos/compose/umesos-cluster-marathon.yml up'
+ExecReload=/bin/sh -c 'docker-compose -p umesos -f /etc/umesos/compose/umesos-cluster-marathon.yml restart'
+ExecStop=/bin/sh -c 'docker-compose -p umesos -f /etc/umesos/compose/umesos-cluster-marathon.yml stop'
+Restart=always
+RestartSec=1s
+StartLimitInterval=10
+StartLimitBurst=5
+[Install]
+WantedBy=multi-user.target

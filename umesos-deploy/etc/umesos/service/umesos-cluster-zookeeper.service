@@ -1,0 +1,14 @@
+[Unit]
+Description=umesos cluster -- zookeeper
+After=docker.service
+Requires=docker.service
+[Service]
+ExecStart=/bin/sh -c 'docker-compose -p umesos -f /etc/umesos/compose/umesos-cluster-zookeeper.yml up'
+ExecReload=/bin/sh -c 'docker-compose -p umesos -f /etc/umesos/compose/umesos-cluster-zookeeper.yml restart'
+ExecStop=/bin/sh -c 'docker-compose -p umesos -f /etc/umesos/compose/umesos-cluster-zookeeper.yml stop'
+Restart=always
+RestartSec=1s
+StartLimitInterval=10
+StartLimitBurst=5
+[Install]
+WantedBy=multi-user.target

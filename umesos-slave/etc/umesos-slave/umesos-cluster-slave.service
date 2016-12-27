@@ -1,0 +1,12 @@
+[Unit]
+Description=umesos cluster -- slave
+After=docker.service
+Requires=docker.service
+[Service]
+ExecStart=/bin/sh -c 'source /etc/umesos-slave/slave_env.sh && mesos-slave'
+Restart=always
+RestartSec=1s
+StartLimitInterval=10
+StartLimitBurst=5
+[Install]
+WantedBy=multi-user.target

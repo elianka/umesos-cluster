@@ -1,0 +1,17 @@
+mesosmaster:
+  image: mesosphere/mesos:1.1.0-2.0.107.ubuntu1404
+  command: mesos-master 
+  net: "host"
+  environment:
+    - MESOS_ZK=%{zk_url}/mesos
+    - MESOS_CLUSTER=%{cluster_name}
+    - MESOS_HOSTNAME=%{public_ip}
+    - MESOS_ADVERTISE_IP=%{private_ip}
+    - MESOS_ADVERTISE_PORT=%{master_port}
+    - MESOS_PORT=%{master_port}
+    - MESOS_IP=%{private_ip}
+    - MESOS_QUORUM=%{quorum}
+    - MESOS_REGISTRY=replicated_log
+    - MESOS_LOG_DIR=/var/log/mesos
+    - MESOS_WORK_DIR=/data/umesos/master
+  restart: always

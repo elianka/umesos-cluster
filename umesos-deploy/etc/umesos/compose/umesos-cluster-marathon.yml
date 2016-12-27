@@ -1,0 +1,14 @@
+marathon:
+  image: mesosphere/marathon:v1.3.6 
+  net: "host"
+  environment:
+    - MARATHON_MASTER=%{zk_url}/mesos
+    - MARATHON_ZK=%{zk_url}/marathon
+    - MARATHON_HOSTNAME=%{public_ip}
+    - MARATHON_HTTP_PORT=%{marathon_port}
+    - MARATHON_HTTP_ADDRESS=%{private_ip}
+    - MARATHON_TASK_LAUNCH_TIMEOUT=300000 # In milliseconds, >= MESOS_EXECUTOR_REGISTRATION_TIMEOUT of Mesos Slave
+    - LIBPROCESS_IP=%{private_ip}
+    #- MARATHON_MESOS_AUTHENTICATION_PRINCIPAL=marathon
+    - MARATHON_HTTP_CREDENTIALS=umesos:umesos
+  restart: always
