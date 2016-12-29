@@ -1,0 +1,11 @@
+[docker-main-repo]
+name=Docker main Repository
+baseurl=http://docker.mirrors.ucloud.cn/centos/$releasever
+gpgcheck=0
+enabled=1
+
+[UCloud-docker-main-repo]
+name=UCloud Docker main Repository
+baseurl=http://docker.mirrors.ucloud.cn/centos/ucloud/$releasever
+gpgcheck=0
+enabled=1

@@ -80,10 +80,32 @@ function init_node() {
   
   #install from yum source;  
   scp ./docker-main.repo root@$1:/etc/yum.repos.d/docker-main.repo
-  pssh -l root -H $1 --inline-stdout "yum install -y docker-engine; systemctl daemon-reload; systemctl enable docker; systemctl start docker;"
+  pssh -t 0 -l root -H $1 --inline-stdout "yum install -y docker-engine; systemctl daemon-reload; systemctl enable docker; systemctl start docker;"
 
   #modify config, use overlay storage and set default docker dir to /data/docker
   pssh -l root -H $1 --inline-stdout "sed -i 's#ExecStart=/usr/bin/dockerd#ExecStart=/usr/bin/dockerd -s overlay --default-ulimit nproc=1024:1024 --default-ulimit nofile=65536:65536 -g /data/docker --live-restore#' /usr/lib/systemd/system/docker.service; service docker restart"
+
+}
+
+function init_node_centos6() {
+  #check kernel version to update kernel to 4.1.0: for docker bugs: https://github.com/docker/docker/issues/10294
+  pssh -l root -H $1 --inline-stdout "uname -r" | grep "4.1.0-13.el6.ucloud.x86_64"
+
+  if [ "$?" != 0 ]; then
+      echo "will update kernel to 4.1.0-13.el6.ucloud.x86_64, waiting for reboot......"
+      pssh -t 0 -l root -H $1 --inline-stdout "wget http://static.ucloud.cn/kernel/4.1.0-13.el6.ucloud.x86_64.tar.gz; tar xf 4.1.0-13.el6.ucloud.x86_64.tar.gz; cd kernel-4.1.0-13.el6.ucloud; ./install.sh; cd ..; rm -rf kernel-4.1.0-13.el6.ucloud 4.1.0-13.el6.ucloud.x86_64.tar.gz; reboot"
+  fi 
+
+  #install docker-compose
+  scp ./docker-compose root@$1:/usr/local/bin/docker-compose
+  pssh -l root -H $1 --inline-stdout "chmod +x /usr/local/bin/docker-compose; docker-compose -v"
+
+  #install docker
+  #install from yum source;
+  scp ./docker-ucloud-6.repo root@$1:/etc/yum.repos.d/docker-ucloud-6.repo
+  pssh -l root -H $1 --inline-stdout "grep 'tmpfs /var/run/docker tmpfs defaults 0 0' /etc/fstab || echo 'tmpfs /var/run/docker tmpfs defaults 0 0' >> /etc/fstab; mount -a"
+  pssh -l root -H $1 --inline-stdout "touch /etc/sysconfig/docker && sed -i '/^other_args=/'d /etc/sysconfig/docker && echo 'other_args=\"-s overlay --default-ulimit nproc=1024:1024 --default-ulimit nofile=65536:65536 -g /data/docker --live-restore\"' >>  /etc/sysconfig/docker"
+  pssh -t 0 -l root -H $1 --inline-stdout "yum install -y docker-engine; chkconfig docker on;"
 
 }
 
@@ -124,7 +146,7 @@ function set_master_node()
 function set_slave_node_binary()
 {
   #echo $1 $2 $azone $owner
-  pssh -l root -H $1 --inline-stdout "rpm -Uvh http://repos.mesosphere.com/el/7/noarch/RPMS/mesosphere-el-repo-7-2.noarch.rpm; yum -y install mesos-1.1.0-2.0.107.centos701406.x86_64; rm -rf /usr/lib/systemd/system/mesos-*.service; mkdir -p /etc/umesos-slave"  
+  pssh -t 0 -l root -H $1 --inline-stdout "rpm -Uvh http://repos.mesosphere.com/el/7/noarch/RPMS/mesosphere-el-repo-7-2.noarch.rpm; yum -y install mesos-1.1.0-2.0.107.centos701406.x86_64; rm -rf /usr/lib/systemd/system/mesos-*.service; mkdir -p /etc/umesos-slave"  
 
   #set and copy config file
   env_file="./umesos-slave/etc/umesos-slave/slave_env.sh"
@@ -144,7 +166,7 @@ function set_slave_node_binary()
   pssh -l root -H ${cluster[$i]} --inline-stdout "uname -r" | grep "4.1.0-13.el7.ucloud.x86_64"
 
   if [ "$?" != 0 ]; then
-      pssh -l root -H $1 --inline-stdout "wget http://static.ucloud.cn/kernel/4.1.0-13.el7.ucloud.x86_64.tar.gz; tar xf 4.1.0-13.el7.ucloud.x86_64.tar.gz; cd kernel-4.1.0-13.el7.ucloud; ./install.sh; cd ..; rm -rf kernel-4.1.0-13.el7.ucloud 4.1.0-13.el7.ucloud.x86_64.tar.gz; systemctl daemon-reload; systemctl enable umesos-cluster-slave; reboot"
+      pssh -t 0 -l root -H $1 --inline-stdout "wget http://static.ucloud.cn/kernel/4.1.0-13.el7.ucloud.x86_64.tar.gz; tar xf 4.1.0-13.el7.ucloud.x86_64.tar.gz; cd kernel-4.1.0-13.el7.ucloud; ./install.sh; cd ..; rm -rf kernel-4.1.0-13.el7.ucloud 4.1.0-13.el7.ucloud.x86_64.tar.gz; systemctl daemon-reload; systemctl enable umesos-cluster-slave; reboot"
   else
       pssh -l root -H $1 --inline-stdout "systemctl daemon-reload; systemctl enable umesos-cluster-slave; systemctl start umesos-cluster-slave"
   fi
@@ -200,7 +222,7 @@ function main()
 
   elif [ "$module" = "slave" ]; then
     echo "deploy slave node: $azone $owner $slave_ip $slave_pub_ip"
-    #init_node $slave_ip
+    init_node $slave_ip
     set_slave_node_binary $slave_ip $zk_url $owner $slave_pub_ip
 
   else
