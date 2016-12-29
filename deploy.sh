@@ -23,7 +23,7 @@ declare -a clusterPublic=("publicip1" "publicip2" "publicip3")
 #多地域mesos集群部署，在下面定义集群IP信息;
 #若无内外网之分，IP填相同值
 #若不希望直接暴露应用至公网，publicIP填成privateIP
-declare -A clusterMap=(["example"]="示例" ["bj"]="北京")
+declare -A clusterMap=(["example"]="示例" ["bj"]="北京" ["new"]="centos7.0")
 
 function get_cluster_by_azone()
 {
@@ -35,6 +35,10 @@ function get_cluster_by_azone()
   bj)
         cluster=("10.9.116.242" "10.9.111.248" "10.9.135.146")
     	clusterPublic=("106.75.13.243" "106.75.64.31" "106.75.4.181")
+        ;;
+  new)
+        cluster=("10.9.139.83" "10.9.115.140" "10.9.147.228" "10.9.117.5" "10.9.154.38")
+    	clusterPublic=("106.75.67.83" "106.75.67.239" "106.75.64.242" "106.75.13.237" "106.75.50.15")
         ;;
   *)
         echo "no such cluster $1"
@@ -76,7 +80,7 @@ function init_node() {
   
   #install from yum source;  
   scp ./docker-main.repo root@$1:/etc/yum.repos.d/docker-main.repo
-  pssh -l root -H $1 --inline-stdout "yum install -y docker-engine; service docker start"
+  pssh -l root -H $1 --inline-stdout "yum install -y docker-engine; systemctl daemon-reload; systemctl enable docker; systemctl start docker;"
 
   #modify config, use overlay storage and set default docker dir to /data/docker
   pssh -l root -H $1 --inline-stdout "sed -i 's#ExecStart=/usr/bin/dockerd#ExecStart=/usr/bin/dockerd -s overlay --default-ulimit nproc=1024:1024 --default-ulimit nofile=65536:65536 -g /data/docker --live-restore#' /usr/lib/systemd/system/docker.service; service docker restart"
@@ -99,13 +103,13 @@ function set_master_node()
   pssh -l root -H $1 --inline-stdout "sed -i 's#%{marathon_port}#$marathon_port#' /etc/umesos/compose/*.yml"
   pssh -l root -H $1 --inline-stdout "sed -i 's#%{quorum}#$quorum#' /etc/umesos/compose/*.yml"
 
-  #set zookeeper confi
+  #set zookeeper config
   cluster_len=${#cluster[@]}
   str="";
   for i in $( seq 0 `expr $cluster_len - 1` )
   do
     str+="server.`expr $i + 1`=${cluster[$i]}:2888:3888 ";
-    echo $str;
+    #echo $str;
   done
 
   pssh -l root -H $1 --inline-stdout "sed -i 's#%{zoo_cluster_id}#$2#' /etc/umesos/compose/*.yml"
@@ -132,14 +136,15 @@ function set_slave_node_binary()
   sed -i "s#%{owner}#$3#" ${env_file}.tmp
   sed -i "s#%{slave_port}#$slave_port#" ${env_file}.tmp
 
-  scp -r ./umesos-slave/etc/umesos-slave/umesos-cluster-slave.service root@$1:/usr/lib/systemd/system/umesos-cluster-slave.service
-  scp -r ${env_file}.tmp root@$1:/etc/umesos-slave/slave_env.sh
+  scp ./umesos-slave/etc/umesos-slave/umesos-cluster-slave.service root@$1:/usr/lib/systemd/system/umesos-cluster-slave.service
+  scp ${env_file}.tmp root@$1:/etc/umesos-slave/slave_env.sh
+  rm -f ${env_file}.tmp
 
   #TODO: check kernel version to update kernel to 4.1: for docker bugs: https://github.com/docker/docker/issues/10294
   pssh -l root -H ${cluster[$i]} --inline-stdout "uname -r" | grep "4.1.0-13.el7.ucloud.x86_64"
 
   if [ "$?" != 0 ]; then
-      pssh -l root -H $1 --inline-stdout "wget http://static.ucloud.cn/kernel/4.1.0-13.el7.ucloud.x86_64.tar.gz; tar xf 4.1.0-13.el7.ucloud.x86_64.tar.gz; cd kernel-4.1.0-13.el7.ucloud; ./install.sh; cd ..; rm -rf kernel-4.1.0-13.el7.ucloud 4.1.0-13.el7.ucloud.x86_64.tar.gz; reboot"
+      pssh -l root -H $1 --inline-stdout "wget http://static.ucloud.cn/kernel/4.1.0-13.el7.ucloud.x86_64.tar.gz; tar xf 4.1.0-13.el7.ucloud.x86_64.tar.gz; cd kernel-4.1.0-13.el7.ucloud; ./install.sh; cd ..; rm -rf kernel-4.1.0-13.el7.ucloud 4.1.0-13.el7.ucloud.x86_64.tar.gz; systemctl daemon-reload; systemctl enable umesos-cluster-slave; reboot"
   else
       pssh -l root -H $1 --inline-stdout "systemctl daemon-reload; systemctl enable umesos-cluster-slave; systemctl start umesos-cluster-slave"
   fi
@@ -155,10 +160,10 @@ function start_cluster()
     
     if [ "$?" != 0 ]; then
         #not "4.1.0-13.el7.ucloud.x86_64", should upgrade kernel
-        pssh -l root -H ${cluster[$i]} --inline-stdout "wget http://static.ucloud.cn/kernel/4.1.0-13.el7.ucloud.x86_64.tar.gz; tar xf 4.1.0-13.el7.ucloud.x86_64.tar.gz; cd kernel-4.1.0-13.el7.ucloud; ./install.sh; cd ..; rm -rf kernel-4.1.0-13.el7.ucloud 4.1.0-13.el7.ucloud.x86_64.tar.gz; reboot"
+        pssh -l root -H ${cluster[$i]} --inline-stdout "wget http://static.ucloud.cn/kernel/4.1.0-13.el7.ucloud.x86_64.tar.gz; tar xf 4.1.0-13.el7.ucloud.x86_64.tar.gz; cd kernel-4.1.0-13.el7.ucloud; ./install.sh; cd ..; rm -rf kernel-4.1.0-13.el7.ucloud 4.1.0-13.el7.ucloud.x86_64.tar.gz; systemctl daemon-reload; systemctl enable umesos-cluster-zookeeper umesos-cluster-master umesos-cluster-marathon; reboot"
     else
         #already "4.1.0-13.el7.ucloud.x86_64"
-        pssh -l root -H ${cluster[$i]} --inline-stdout "systemctl daemon-reload; systemctl enable umesos-cluster-zookeeper umesos-cluster-master umesos-cluster-marathon; systemctl start umesos-cluster-zookeeper umesos-cluster-master umesos-cluster-marathon"
+        pssh -l root -H ${cluster[$i]} --inline-stdout "systemctl daemon-reload; systemctl enable umesos-cluster-zookeeper umesos-cluster-master umesos-cluster-marathon; systemctl start umesos-cluster-zookeeper umesos-cluster-master umesos-cluster-marathon; reboot"
     fi
   done
 }
