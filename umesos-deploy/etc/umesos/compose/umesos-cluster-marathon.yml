@@ -10,5 +10,5 @@ marathon:
     - MARATHON_TASK_LAUNCH_TIMEOUT=300000 # In milliseconds, >= MESOS_EXECUTOR_REGISTRATION_TIMEOUT of Mesos Slave
     - LIBPROCESS_IP=%{private_ip}
     #- MARATHON_MESOS_AUTHENTICATION_PRINCIPAL=marathon
-    - MARATHON_HTTP_CREDENTIALS=umesos:umesos
+    - MARATHON_HTTP_CREDENTIALS=%{marathon_auth}
   restart: always

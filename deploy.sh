@@ -11,6 +11,7 @@ owner=admin
 master_port=5050
 slave_port=5051
 marathon_port=8080
+marathon_auth="umesos:umesos"
 quorum=2
 
 module=cluster
@@ -23,7 +24,7 @@ declare -a clusterPublic=("publicip1" "publicip2" "publicip3")
 #多地域mesos集群部署，在下面定义集群IP信息;
 #若无内外网之分，IP填相同值
 #若不希望直接暴露应用至公网，publicIP填成privateIP
-declare -A clusterMap=(["example"]="示例" ["bj"]="北京" ["new"]="centos7.0")
+declare -A clusterMap=(["example"]="示例" ["bj"]="北京" )
 
 function get_cluster_by_azone()
 {
@@ -35,10 +36,6 @@ function get_cluster_by_azone()
   bj)
         cluster=("10.9.116.242" "10.9.111.248" "10.9.135.146")
     	clusterPublic=("106.75.13.243" "106.75.64.31" "106.75.4.181")
-        ;;
-  new)
-        cluster=("10.9.139.83" "10.9.115.140" "10.9.147.228" "10.9.117.5" "10.9.154.38")
-    	clusterPublic=("106.75.67.83" "106.75.67.239" "106.75.64.242" "106.75.13.237" "106.75.50.15")
         ;;
   *)
         echo "no such cluster $1"
@@ -73,40 +70,53 @@ function usage() {
 
 function init_node() {
 #install docker and docker-compose
+  #update kernel if kernel not 4.1.0
+  reboot_flag=false
+  scp ./docker-ucoud-6.repo root@$1:/etc/yum.repos.d/docker-ucloud-6.repo
+  ##TODO: check kernel version to update kernel to 4.1: for docker bugs: https://github.com/docker/docker/issues/10294
+  pssh -t 0 -l root -H $1 --inline-stdout 'uname -r | grep -q 4.1.0;'
+  if [ "$?" != 0 ]; then
+    reboot_flag=true
+    echo "its normal for first update kernel. please wait..."
+  fi
+  pssh -t 0 -l root -H $1 --inline-stdout 'uname -r | grep -q 4.1.0; if [ "$?" != 0 ]; then \
+	yum -y -q --disableexcludes=all install  kernel-4.1.0; \
+	fi' 
+  if $reboot_flag; then
+    pssh -t 0 -l root -H $1 --inline-stdout 'reboot'
+    echo update kernel to 4.1.0. wait for reboot... ; sleep 5
+    pssh -t 0 -l root -H $1 --inline-stdout 'echo reboot successful; uname -r' 
+  fi
   #install docker-compose
   scp ./docker-compose root@$1:/usr/local/bin/docker-compose
   pssh -l root -H $1 --inline-stdout "chmod +x /usr/local/bin/docker-compose; docker-compose -v"
   #install docker
   
-  #install from yum source;  
-  scp ./docker-main.repo root@$1:/etc/yum.repos.d/docker-main.repo
-  pssh -t 0 -l root -H $1 --inline-stdout "yum install -y docker-engine; systemctl daemon-reload; systemctl enable docker; systemctl start docker;"
+  # for centos 7
+  pssh -t 0 -l root -H $1 --inline-stdout 'uname -r | grep -q el7; if [ "$?" == 0 ]; then \
+	echo "install docker-engine, please wait...."; rm -f /etc/yum.repos.d/docker-main.repo; \
+	  echo "[docker-main-repo]" >> /etc/yum.repos.d/docker-main.repo;\  
+	  echo "name=Docker main Repository" >> /etc/yum.repos.d/docker-main.repo;\ 
+	  echo "baseurl=https://yum.dockerproject.org/repo/main/centos/7" >> /etc/yum.repos.d/docker-main.repo;\ 
+	  echo "enabled=1" >> /etc/yum.repos.d/docker-main.repo;\ 
+	  echo "gpgcheck=1" >> /etc/yum.repos.d/docker-main.repo;\ 
+	  echo "gpgkey=https://yum.dockerproject.org/gpg" >> /etc/yum.repos.d/docker-main.repo;\ 
+	yum install -y -q docker-engine;  \
+	sed -i "s#ExecStart=/usr/bin/dockerd#ExecStart=/usr/bin/dockerd -s overlay --default-ulimit nproc=1024:1024 --default-ulimit nofile=65536:65536 -g /data/docker --live-restore#" /usr/lib/systemd/system/docker.service; systemctl daemon-reload; systemctl enable docker; systemctl start docker; \
+	fi'
 
-  #modify config, use overlay storage and set default docker dir to /data/docker
-  pssh -l root -H $1 --inline-stdout "sed -i 's#ExecStart=/usr/bin/dockerd#ExecStart=/usr/bin/dockerd -s overlay --default-ulimit nproc=1024:1024 --default-ulimit nofile=65536:65536 -g /data/docker --live-restore#' /usr/lib/systemd/system/docker.service; service docker restart"
-
-}
-
-function init_node_centos6() {
-  #check kernel version to update kernel to 4.1.0: for docker bugs: https://github.com/docker/docker/issues/10294
-  pssh -l root -H $1 --inline-stdout "uname -r" | grep "4.1.0-13.el6.ucloud.x86_64"
+  # for centos 6
+  pssh -t 0 -l root -H $1 --inline-stdout 'uname -r | grep -q el6; if [ "$?" == 0 ]; then \
+	echo "install docker-engine, please wait...."; \
+	mkdir -p /var/run/docker; grep -q "tmpfs /var/run/docker tmpfs defaults 0 0" /etc/fstab || echo "tmpfs /var/run/docker tmpfs defaults 0 0" >> /etc/fstab; mount -a; \
+	touch /etc/sysconfig/docker && sed -i "/^other_args=/"d /etc/sysconfig/docker && echo "other_args=\"-s overlay --default-ulimit nproc=1024:1024 --default-ulimit nofile=65536:65536 -g /data/docker --live-restore\"" >>  /etc/sysconfig/docker ;\
+	yum install -y -q docker-engine; chkconfig docker on; service docker start;\
+	fi'
 
   if [ "$?" != 0 ]; then
-      echo "will update kernel to 4.1.0-13.el6.ucloud.x86_64, waiting for reboot......"
-      pssh -t 0 -l root -H $1 --inline-stdout "wget http://static.ucloud.cn/kernel/4.1.0-13.el6.ucloud.x86_64.tar.gz; tar xf 4.1.0-13.el6.ucloud.x86_64.tar.gz; cd kernel-4.1.0-13.el6.ucloud; ./install.sh; cd ..; rm -rf kernel-4.1.0-13.el6.ucloud 4.1.0-13.el6.ucloud.x86_64.tar.gz; reboot"
-  fi 
-
-  #install docker-compose
-  scp ./docker-compose root@$1:/usr/local/bin/docker-compose
-  pssh -l root -H $1 --inline-stdout "chmod +x /usr/local/bin/docker-compose; docker-compose -v"
-
-  #install docker
-  #install from yum source;
-  scp ./docker-ucloud-6.repo root@$1:/etc/yum.repos.d/docker-ucloud-6.repo
-  pssh -l root -H $1 --inline-stdout "grep 'tmpfs /var/run/docker tmpfs defaults 0 0' /etc/fstab || echo 'tmpfs /var/run/docker tmpfs defaults 0 0' >> /etc/fstab; mount -a"
-  pssh -l root -H $1 --inline-stdout "touch /etc/sysconfig/docker && sed -i '/^other_args=/'d /etc/sysconfig/docker && echo 'other_args=\"-s overlay --default-ulimit nproc=1024:1024 --default-ulimit nofile=65536:65536 -g /data/docker --live-restore\"' >>  /etc/sysconfig/docker"
-  pssh -t 0 -l root -H $1 --inline-stdout "yum install -y docker-engine; chkconfig docker on;"
-
+    echo "not support os type or docker install failed."
+    exit 1
+  fi
 }
 
 # arg1: node_ip arg2: zoo_cluster_id arg3: zk_url arg4: publicIP
@@ -117,13 +127,14 @@ function set_master_node()
   scp -r ./umesos-deploy/etc/umesos root@$1:/etc/
 
   #modify deploy files by hostip and hostPublic IP
-  pssh -l root -H $1 --inline-stdout "sed -i 's#%{zk_url}#$3#' /etc/umesos/compose/*.yml"
-  pssh -l root -H $1 --inline-stdout "sed -i 's#%{cluster_name}#${clusterMap[$azone]}#' /etc/umesos/compose/*.yml"
-  pssh -l root -H $1 --inline-stdout "sed -i 's#%{private_ip}#$1#' /etc/umesos/compose/*.yml"
-  pssh -l root -H $1 --inline-stdout "sed -i 's#%{public_ip}#$4#' /etc/umesos/compose/*.yml"
-  pssh -l root -H $1 --inline-stdout "sed -i 's#%{master_port}#$master_port#' /etc/umesos/compose/*.yml"
-  pssh -l root -H $1 --inline-stdout "sed -i 's#%{marathon_port}#$marathon_port#' /etc/umesos/compose/*.yml"
-  pssh -l root -H $1 --inline-stdout "sed -i 's#%{quorum}#$quorum#' /etc/umesos/compose/*.yml"
+  pssh -l root -H $1 --inline-stdout "sed -i 's#%{zk_url}#$3#' /etc/umesos/compose/*.yml; \
+  sed -i 's#%{cluster_name}#${clusterMap[$azone]}#' /etc/umesos/compose/*.yml; \
+  sed -i 's#%{private_ip}#$1#' /etc/umesos/compose/*.yml; \
+  sed -i 's#%{public_ip}#$4#' /etc/umesos/compose/*.yml; \
+  sed -i 's#%{master_port}#$master_port#' /etc/umesos/compose/*.yml; \
+  sed -i 's#%{marathon_port}#$marathon_port#' /etc/umesos/compose/*.yml; \
+  sed -i 's#%{marathon_auth}#$marathon_auth#' /etc/umesos/compose/*.yml; \
+  sed -i 's#%{quorum}#$quorum#' /etc/umesos/compose/*.yml;"
 
   #set zookeeper config
   cluster_len=${#cluster[@]}
@@ -134,11 +145,27 @@ function set_master_node()
     #echo $str;
   done
 
-  pssh -l root -H $1 --inline-stdout "sed -i 's#%{zoo_cluster_id}#$2#' /etc/umesos/compose/*.yml"
-  pssh -l root -H $1 --inline-stdout "sed -i 's#%{zoo_cluster_server}#$str#' /etc/umesos/compose/*.yml"
+  pssh -l root -H $1 --inline-stdout "sed -i 's#%{zoo_cluster_id}#$2#' /etc/umesos/compose/*.yml; \
+  sed -i 's#%{zoo_cluster_server}#$str#' /etc/umesos/compose/*.yml"
 
   #set auto-start when power-on
-  pssh -l root -H $1 --inline-stdout "cd /etc/umesos/service; chmod 644 umesos-cluster-*.service; cp umesos-cluster-*.service /usr/lib/systemd/system/"
+  # for centos 7
+  pssh -l root -H $1 --inline-stdout 'uname -r | grep -q el7; if [ "$?" == 0 ]; then \
+  cd /etc/umesos/service; chmod 644 umesos-cluster-*.service; cp umesos-cluster-*.service /usr/lib/systemd/system/; \
+  fi'
+
+  # for centos 6
+  pssh -l root -H $1 --inline-stdout 'uname -r | grep -q el6; if [ "$?" == 0 ]; then \
+    cd /etc/umesos/service; chmod 644 umesos-cluster-*.conf; \
+    ln -sf /etc/umesos/service/umesos-cluster-master.conf /etc/init/; \
+    ln -sf /etc/umesos/service/umesos-cluster-marathon.conf /etc/init/; \
+    ln -sf /etc/umesos/service/umesos-cluster-zookeeper.conf /etc/init/; \
+  fi'
+
+  if [ "$?" != 0 ]; then
+    echo "not support os type or mesos-master install failed."
+    exit 1
+  fi
 
 }
 
@@ -146,30 +173,34 @@ function set_master_node()
 function set_slave_node_binary()
 {
   #echo $1 $2 $azone $owner
-  pssh -t 0 -l root -H $1 --inline-stdout "rpm -Uvh http://repos.mesosphere.com/el/7/noarch/RPMS/mesosphere-el-repo-7-2.noarch.rpm; yum -y install mesos-1.1.0-2.0.107.centos701406.x86_64; rm -rf /usr/lib/systemd/system/mesos-*.service; mkdir -p /etc/umesos-slave"  
+  scp -r ./umesos-slave/etc/umesos-slave root@$1:/etc/
 
   #set and copy config file
-  env_file="./umesos-slave/etc/umesos-slave/slave_env.sh"
-  cp ${env_file} ${env_file}.tmp
-  sed -i "s#%{zk_url}#$2#" ${env_file}.tmp
-  sed -i "s#%{private_ip}#$1#" ${env_file}.tmp
-  sed -i "s#%{public_ip}#$4#" ${env_file}.tmp
-  sed -i "s#%{azone}#$azone#" ${env_file}.tmp
-  sed -i "s#%{owner}#$3#" ${env_file}.tmp
-  sed -i "s#%{slave_port}#$slave_port#" ${env_file}.tmp
+  env_file="/etc/umesos-slave/slave_env.sh"
+  pssh -l root -H $1 --inline-stdout "sed -i 's#%{zk_url}#$2#' ${env_file}; \
+  sed -i 's#%{private_ip}#$1#' ${env_file}; \
+  sed -i 's#%{public_ip}#$4#' ${env_file}; \
+  sed -i 's#%{azone}#$azone#' ${env_file}; \
+  sed -i 's#%{owner}#$3#' ${env_file}; \
+  sed -i 's#%{slave_port}#$slave_port#' ${env_file};" 
 
-  scp ./umesos-slave/etc/umesos-slave/umesos-cluster-slave.service root@$1:/usr/lib/systemd/system/umesos-cluster-slave.service
-  scp ${env_file}.tmp root@$1:/etc/umesos-slave/slave_env.sh
-  rm -f ${env_file}.tmp
+  # for centos 7
+  pssh -t 0 -l root -H $1 --inline-stdout 'uname -r | grep -q el7; if [ "$?" == 0 ]; then \
+  rpm -Uvh http://repos.mesosphere.com/el/7/noarch/RPMS/mesosphere-el-repo-7-2.noarch.rpm; yum -y -q install mesos-1.1.0-2.0.107.centos701406.x86_64; rm -rf /usr/lib/systemd/system/mesos-*.service; cp /etc/umesos-slave/umesos-cluster-slave.service /usr/lib/systemd/system/umesos-cluster-slave.service; \
+  systemctl daemon-reload; systemctl enable umesos-cluster-slave; systemctl start umesos-cluster-slave;
+  fi '
 
-  #TODO: check kernel version to update kernel to 4.1: for docker bugs: https://github.com/docker/docker/issues/10294
-  pssh -l root -H ${cluster[$i]} --inline-stdout "uname -r" | grep "4.1.0-13.el7.ucloud.x86_64"
-
+  # for centos 6
+  pssh -t 0 -l root -H $1 --inline-stdout 'uname -r | grep -q el6; if [ "$?" == 0 ]; then \
+    rpm -Uvh http://repos.mesosphere.com/el/6/noarch/RPMS/mesosphere-el-repo-6-2.noarch.rpm; yum -y -q install mesos; rm -rf /etc/init/mesos-*.conf; \
+    ln -sf /etc/umesos-slave/umesos-cluster-slave.conf /etc/init/; initctl reload-configuration; initctl start umesos-cluster-slave;\
+  fi'
+ 
   if [ "$?" != 0 ]; then
-      pssh -t 0 -l root -H $1 --inline-stdout "wget http://static.ucloud.cn/kernel/4.1.0-13.el7.ucloud.x86_64.tar.gz; tar xf 4.1.0-13.el7.ucloud.x86_64.tar.gz; cd kernel-4.1.0-13.el7.ucloud; ./install.sh; cd ..; rm -rf kernel-4.1.0-13.el7.ucloud 4.1.0-13.el7.ucloud.x86_64.tar.gz; systemctl daemon-reload; systemctl enable umesos-cluster-slave; reboot"
-  else
-      pssh -l root -H $1 --inline-stdout "systemctl daemon-reload; systemctl enable umesos-cluster-slave; systemctl start umesos-cluster-slave"
+    echo "not support os type or mesos-slave install failed."
+    exit 1
   fi
+  
 }
 
 function start_cluster()
@@ -177,16 +208,17 @@ function start_cluster()
   cluster_len=${#cluster[@]}
   for i in $( seq 0 `expr $cluster_len - 1` )
   do 
-    #TODO: check kernel version to update kernel to 4.1: for docker bugs: https://github.com/docker/docker/issues/10294
-    pssh -l root -H ${cluster[$i]} --inline-stdout "uname -r" | grep "4.1.0-13.el7.ucloud.x86_64"
-    
-    if [ "$?" != 0 ]; then
-        #not "4.1.0-13.el7.ucloud.x86_64", should upgrade kernel
-        pssh -l root -H ${cluster[$i]} --inline-stdout "wget http://static.ucloud.cn/kernel/4.1.0-13.el7.ucloud.x86_64.tar.gz; tar xf 4.1.0-13.el7.ucloud.x86_64.tar.gz; cd kernel-4.1.0-13.el7.ucloud; ./install.sh; cd ..; rm -rf kernel-4.1.0-13.el7.ucloud 4.1.0-13.el7.ucloud.x86_64.tar.gz; systemctl daemon-reload; systemctl enable umesos-cluster-zookeeper umesos-cluster-master umesos-cluster-marathon; reboot"
-    else
-        #already "4.1.0-13.el7.ucloud.x86_64"
-        pssh -l root -H ${cluster[$i]} --inline-stdout "systemctl daemon-reload; systemctl enable umesos-cluster-zookeeper umesos-cluster-master umesos-cluster-marathon; systemctl start umesos-cluster-zookeeper umesos-cluster-master umesos-cluster-marathon; reboot"
-    fi
+    # for centos 7
+    pssh -l root -H ${cluster[$i]} --inline-stdout 'uname -r | grep -q el7; if [ "$?" == 0 ]; then \
+	systemctl daemon-reload; systemctl enable umesos-cluster-zookeeper umesos-cluster-master umesos-cluster-marathon; systemctl start umesos-cluster-zookeeper umesos-cluster-master umesos-cluster-marathon; \
+    fi'
+
+    # for centos 6
+    pssh -l root -H ${cluster[$i]} --inline-stdout 'uname -r | grep -q el6; if [ "$?" == 0 ]; then \
+	initctl reload-configuration; initctl start umesos-cluster-zookeeper; \
+      initctl start umesos-cluster-master;  \
+      initctl start umesos-cluster-marathon; \
+    fi'
   done
 }
 
